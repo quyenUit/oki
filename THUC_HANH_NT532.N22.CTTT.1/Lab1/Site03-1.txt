@@ -1,0 +1,266 @@
+--Create database link
+Create database link DB_Site_01 connect to C##M01 identified by t123 using 'CN1';
+Create database link DB_Site_02 connect to C##M02 identified by t123 using 'CN2';
+
+
+create table CUSTOMER(
+id varchar2(10) primary key,
+fname varchar2(50),
+lname varchar2(50),
+phone varchar2(15),
+address varchar2(50),
+email varchar2(50),
+bdate date
+);
+
+create table MEMBERCARD (
+id varchar2(10) primary key,
+cusid varchar2(10),
+balance number,
+opendate date,
+expireddate date
+);
+
+create table BRANCH(
+id varchar2(5) primary key,
+name varchar2(50),
+address varchar2(50)
+);
+
+create table TRANSACT(
+id number GENERATED ALWAYS as IDENTITY(START with 1 INCREMENT by 1),
+branchid varchar2(5),
+cardid varchar2(10),
+amount number,
+transactdate date,
+transacttype char(10),
+beneficiary_cardid varchar2(10)
+);
+
+
+
+
+ALTER TABLE MEMBERCARD ADD CONSTRAINT FK_CARD_CUSTOMER FOREIGN KEY (cusid) REFERENCES CUSTOMER(id);
+
+ALTER TABLE TRANSACT ADD CONSTRAINT FK_TRANSACT_MEMBERCARD FOREIGN KEY (cardid) REFERENCES MEMBERCARD(id);
+
+ALTER TABLE TRANSACT ADD CONSTRAINT FK_TRANSACT_BRANCH FOREIGN KEY (branchid) REFERENCES BRANCH(id);
+
+-- ALTER TABLE TRANSACT ADD CONSTRAINT FK_TRANSACT_TRANSFER_MEMBERCARD FOREIGN KEY (beneficiary_cardid) REFERENCES MEMBERCARD(id);
+
+
+-- Trigger
+CREATE OR REPLACE TRIGGER UpdateBalance
+ AFTER INSERT ON TRANSACT
+ FOR EACH ROW
+ BEGIN
+    IF :NEW.transacttype = 'Deposit' THEN
+            UPDATE MEMBERCARD
+            SET MEMBERCARD.balance=MEMBERCARD.balance + :NEW.amount
+            WHERE MEMBERCARD.id=:NEW.cardid;
+    ELSIF :NEW.transacttype = 'Withdraw' THEN
+            UPDATE MEMBERCARD
+            SET MEMBERCARD.balance=MEMBERCARD.balance - :NEW.amount
+            WHERE MEMBERCARD.id=:NEW.cardid;
+    ELSIF :NEW.transacttype = 'Transfer' THEN
+            UPDATE MEMBERCARD
+            SET MEMBERCARD.balance=MEMBERCARD.balance - :NEW.amount
+            WHERE MEMBERCARD.id=:NEW.cardid;
+    END IF;
+END;
+
+
+ -- Procedure
+ 
+ create or replace procedure RegisterAccount(id in varchar2, fname in varchar2, lname in varchar2, phone in varchar2, address in varchar2, email in varchar2, bdate in date)
+as
+begin
+    if(address = 'District 1') then
+        insert into C##CN1.CUSTOMER@DB_Site_01 values (id, fname, lname, phone, address, email, bdate);
+    elsif(address = 'District 3') then
+        insert into CUSTOMER  values (id, fname, lname, phone, address, email, bdate);
+    elsif(address = 'District 2') then
+        insert into C##CN2.CUSTOMER@DB_Site_02 values (id, fname, lname, phone, address, email, bdate);
+    end if;
+    COMMIT;
+end;
+
+create or replace procedure OpenCard(card_id in varchar2, cusid in varchar2,  balance in number, opendate in date, expireddate in date)
+as
+    count_id int;
+begin
+    select count(id) into count_id from CUSTOMER where id = cusid;
+    dbms_output.put_line (count_id);
+    if(count_id=1) then
+        insert into MEMBERCARD values (card_id, cusid, balance, opendate, expireddate);
+    else
+        select count(id) into count_id from C##M01.CUSTOMER@DB_Site_01 where id = cusid;
+        if(count_id=1)then
+            insert into C##CN1.MEMBERCARD@DB_Site_01 values (card_id, cusid, balance, opendate, expireddate);
+        else
+            select count(id) into count_id from C##M02.CUSTOMER@DB_Site_02 where id = cusid;
+            if(count_id=1)then
+                insert into C##CN2.MEMBERCARD@DB_Site_02 values (id, cusid, balance, opendate, expireddate);
+            end if;
+        end if;
+    end if;
+    COMMIT;
+end;
+ 
+create or replace procedure Deposit(deposit_cardid in varchar2, deposit_money in Number)
+As
+    count_id int;
+Begin
+    select count(card.id) into count_id from MEMBERCARD where card.id = deposit_cardid;
+    if(count_id=1) then
+        insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype) values('CN03', deposit_cardid, deposit_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Deposit');
+    else
+        select count(card.id) into count_id from C##CN1.MEMBERCARD@DB_Site_01 where card.id = deposit_cardid;
+        if(count_id=1) then
+            insert into C##CN1.TRANSACT@DB_Site_01 (branchid, cardid, amount, transactdate, transacttype) values('CN03', deposit_cardid, deposit_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Deposit');
+       else
+            select count(card.id) into count_id from C##CN2.MEMBERCARD@DB_Site_02 where card.id = deposit_cardid;
+            if(count_id=1) then
+                insert into C##CN2.TRANSACT@DB_Site_02 (branchid, cardid, amount, transactdate, transacttype) values('CN03',v_CUSID,v_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Deposit');
+            end if;
+        end if;
+    end if;
+    COMMIT;
+End;
+
+
+create or replace procedure Withdraw(withdraw_cardid in varchar2, withdraw_money in Number)
+As
+    count_id int;
+Begin
+    select count(card.id) into count_id from CARD where card.id = withdraw_cardid;
+    if(count_id>0) then
+        insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype) values('CN03', withdraw_cardid, withdraw_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Withdraw');
+    else 
+        select count(card.id) into count_id from C##CN1.MEMBERCARD@DB_Site_01 where card.id = withdraw_cardid;
+        if(count_id>0) then
+            insert into C##CN1.TRANSACT@DB_Site_01 (branchid, cardid, amount, transactdate, transacttype) values('CN03', withdraw_cardid, withdraw_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Withdraw');
+        else
+           select count(card.id) into dem from C##CN2.CARD@DB_Site_02 where card.id = withdraw_cardid;
+            if(count_id>0) then
+                insert into C##CN2.TRANSACT@DB_Site_02 (branchid, cardid, amount, transactdate, transacttype) values('CN03', withdraw_cardid, withdraw_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Withdraw');
+            end if;
+        end if;
+     end if;
+     commit;
+END;
+
+
+create or replace procedure Transfer(transfer_cardid in varchar2, transfer_beneficiary_carid in varchar2, transfer_money in Number)
+as
+    count_id int;
+    count_benefit_id int;
+begin
+    select count(card.id) into count_id from CARD where card.id = transfer_cardid;
+    if(count_id>0) then
+        insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype, beneficiary_cardid) values ('CN03', transfer_cardid, transfer_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Transfer', transfer_beneficiary_carid);
+    else 
+        select count(id) into count_id from C##CN1.MEMBERCARD@DB_Site_01 where id = transfer_cardid;
+        if(count_id>0) then
+            insert into C##M01.TRANSACT@DB_Site_01 (branchid, cardid, amount, transactdate, transacttype, beneficiary_cardid) values ('CN03', transfer_cardid, transfer_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Transfer', transfer_beneficiary_carid);
+        else
+            select count(id) into dem from C##CN2.MEMBERCARD@DB_Site_02 where id = transfer_cardid;
+            if(count_id>0) then
+                insert into C##CN2.TRANSACT@DB_Site_02 (branchid, cardid, amount, transactdate, transacttype, beneficiary_cardid) values ('CN03', transfer_cardid, transfer_money, TO_DATE(sysdate, 'dd/mm/yyyy'), 'Transfer', transfer_beneficiary_carid);
+            end if;
+        end if;
+     end if;
+     
+     
+     select count(card.id) into count_benefit_id from MEMBERCARD where card.id = transfer_beneficiary_carid;
+     if(count_benefit_id>0) then
+        update card set card.balance = card.balance + transfer_money where card.id = transfer_beneficiary_carid;
+     else
+        select count(id) into count_benefit_id from C##CN1.MEMBERCARD@DB_Site_01 where id = transfer_beneficiary_carid;
+        if(count_benefit_id>0) then
+            update C##CN1.MEMBERCARD@DB_Site_01 set balance = balance + transfer_money where id = transfer_beneficiary_carid;
+        else
+            select count(id) into count_benefit_id from C##CN2.MEMBERCARD@DB_Site_02 where id = transfer_beneficiary_carid;
+            if(count_benefit_id>0) then
+                update C##CN2.MEMBERCARD@DB_Site_02 set balance = balance + transfer_money where id = transfer_beneficiary_carid;
+            end if;
+        end if;
+     end if;
+     commit;
+end;
+ 
+ 
+----------------- Site 1 -----------------------------------
+insert into CUSTOMER values('111','Nguyen', 'Van A', '123', 'District 1', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('222','Nguyen', 'Van B', '123', 'District 1', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('333','Nguyen', 'Van C', '123', 'District 1', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+
+insert into MEMBERCARD values ('1', '111', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('2', '222', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('3', '333', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+
+----------------------------------------------------------------
+
+
+
+----------------- Site 2 -----------------------------------
+insert into CUSTOMER values('444','Nguyen', 'Van D', '123', 'District 2', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('555','Nguyen', 'Van E', '123', 'District 2', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('666','Nguyen', 'Van F', '123', 'District 2', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+
+insert into MEMBERCARD values ('4', '444', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('5', '555', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('6', '666', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+----------------------------------------------------------------
+
+
+
+----------------- Site 3 -----------------------------------
+insert into CUSTOMER values('777','Nguyen', 'Van G', '123', 'District 3', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('888','Nguyen', 'Van H', '123', 'District 3', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+insert into CUSTOMER values('999','Nguyen', 'Van I', '123', 'District 3', 'abc@gmail.com', TO_DATE('1-1-1999', 'dd/mm/yyyy'));
+
+insert into MEMBERCARD values ('7', '777', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('8', '888', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+insert into MEMBERCARD values ('9', '999', '1000', TO_DATE('1-1-2015', 'dd/mm/yyyy'), TO_DATE('1-1-2019', 'dd/mm/yyyy'));
+----------------------------------------------------------------
+
+
+insert into BRANCH values('CN01','ACB D1', 'District 1');
+insert into BRANCH values('CN02','ACB D2', 'District 1');
+insert into BRANCH values('CN03','ACB D3', 'District 1');
+
+
+insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype) values ('CN02', '4', 1, TO_DATE('1-1-2016', 'dd/mm/yyyy'), 'Deposit');
+insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype) values ('CN02', '5', 1, TO_DATE('1-1-2016', 'dd/mm/yyyy'), 'Withdraw');
+insert into TRANSACT (branchid, cardid, amount, transactdate, transacttype, beneficiary_cardid) values  ('CN02', '4', 1, TO_DATE('1-1-2016', 'dd/mm/yyyy'), 'Transfer', '6');
+
+
+select * from C##CN1.Card@DB_Site_01
+
+select * from customer
+select * from membercard;
+select * from transact
+
+BEGIN
+    RegisterAccount(481, 'test2', 'TEST2', '632453452', 'District 1', 'AA', TO_DATE('1-1-2016', 'dd/mm/yyyy'));
+END;
+
+BEGIN
+    OpenCard('999', '481', 10, TO_DATE('1-1-2016', 'dd/mm/yyyy'), TO_DATE('1-1-2016', 'dd/mm/yyyy'));
+END;
+
+BEGIN
+    DEPOSIT('1', 5);
+END;
+
+BEGIN
+   WITHDRAW('1', 30);
+END;
+
+BEGIN
+    TRANSFER('1', '2', 2);
+END;
+
+
+set serveroutput on
